@@ -1,0 +1,30 @@
+[Unit]
+Description=ShotGrid Event Trigger Service
+After=network.target
+
+[Service]
+Type=simple
+# 실행할 사용자 계정과 그룹을 지정하세요 (보안을 위해 root 사용 지양)
+# User=your_username
+# Group=your_groupname
+
+# 프로젝트 루트 디렉토리 (main_trigger.py가 있는 절대 경로)
+WorkingDirectory=/westworld/inhouse/tool/shotgun/event_trigger
+
+# 실행 명령어 (파이썬 경로와 스크립트 경로를 환경에 맞게 수정하세요)
+ExecStart=/westworld/inhouse/tool/anaconda3/envs/onetera/bin/python /westworld/inhouse/tool/shotgun/event_trigger/main_trigger.py
+
+# 프로세스가 죽으면 10초 후 자동 재시작
+Restart=always
+RestartSec=10
+
+# 환경 변수가 필요하다면 아래와 같이 추가
+# Environment=PYTHONPATH=/westworld/inhouse/tool/shotgun/event_trigger
+
+# 로그 출력 설정 (journalctl -u event_trigger 로 확인 가능)
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
