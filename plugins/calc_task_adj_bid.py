@@ -91,16 +91,20 @@ def update_task_adj_bid(task_id, timelog_user):
         # 공식 적용
         try:
             # time_logs_sum과 est_in_mins는 분 단위
-            calc_value = 1.0 - (float(time_logs_sum) / (float(est_in_mins) * factor))
+            # 결과값은 0.0 ~ 1.0 사이의 실수
+            raw_value = 1.0 - (float(time_logs_sum) / (float(est_in_mins) * factor))
+            
+            # Percent 타입 필드는 0~100 사이의 정수값을 받음
+            calc_value = int(raw_value * 100)
             
             # 기존 값과 다를 경우에만 업데이트 (불필요한 API 호출 방지)
             current_val = task.get('sg_timelog__ajd_bid')
             
-            # 값이 없거나 차이가 있을 때 업데이트 (소수점 4자리 정도 차이)
-            if current_val is None or abs(float(current_val) - calc_value) > 0.0001:
+            # 값이 없거나 차이가 있을 때 업데이트
+            if current_val is None or current_val != calc_value:
                 sg.update('Task', task_id, {'sg_timelog__ajd_bid': calc_value})
-                print("[Calc Adj Bid] Task {0} Updated: {1:.4f} (Time: {2}, Est: {3}, Factor: {4}, User: {5})".format(
-                    task_id, calc_value, time_logs_sum, est_in_mins, factor, timelog_user.get('name')))
+                print("[Calc Adj Bid] Task {0} Updated: {1}% (Raw: {2:.4f}, Time: {3}, Est: {4}, Factor: {5}, User: {6})".format(
+                    task_id, calc_value, raw_value, time_logs_sum, est_in_mins, factor, timelog_user.get('name')))
                 
         except ZeroDivisionError:
             print("[Calc Adj Bid] Task {0}: Division by zero during calculation.".format(task_id))
