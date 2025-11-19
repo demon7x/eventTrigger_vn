@@ -116,6 +116,24 @@ def main(last_id):
     if not sg:
         return last_id
 
+    # -------------------------------------------------------------------------
+    # 초기화 로직: last_id가 없으면 최신 이벤트 ID로 설정
+    # -------------------------------------------------------------------------
+    if not last_id:
+        try:
+            latest_event = sg.find_one(
+                "EventLogEntry",
+                [],
+                ["id"],
+                order=[{"field_name": "id", "direction": "desc"}]
+            )
+            if latest_event:
+                print("[Calc Adj Bid] Initializing last_id to latest event: {0}".format(latest_event['id']))
+                return latest_event['id']
+        except Exception as e:
+            print("[Calc Adj Bid] Error getting latest event: {0}".format(e))
+            return last_id
+
     # TimeLog 변경 감지 (New, Change)
     # Task의 time_logs_sum은 TimeLog가 추가되거나 변경될 때 변동됨
     event_types = ['Shotgun_TimeLog_New', 'Shotgun_TimeLog_Change']
