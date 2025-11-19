@@ -93,7 +93,7 @@ def update_task_adj_bid(task_id, timelog_user):
                 factor = get_artist_level_factor(user.get('sg_artist_level'))
 
         try:
-            raw_value = 1.0 - (float(time_logs_sum) / (float(est_in_mins) * factor))
+            raw_value = float(time_logs_sum) / (float(est_in_mins) * factor)
             calc_value = int(raw_value * 100)
             
             current_val = task.get('sg_timelog__ajd_bid')
