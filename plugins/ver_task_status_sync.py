@@ -84,6 +84,24 @@ def sync_version_to_task( old_id ):
 #        print "Previous ID is same with old id"
 #        return
 
+    # -------------------------------------------------------------------------
+    # ID 격차 확인 및 Skip 로직 추가
+    # -------------------------------------------------------------------------
+    try:
+        latest_event = sg.find_one(
+            "EventLogEntry",
+            [],
+            ["id"],
+            order=[{"field_name": "id", "direction": "desc"}]
+        )
+        if latest_event:
+            latest_id = latest_event['id']
+            if old_id and (latest_id - old_id > 5000):
+                print("[Ver Status Sync] ID gap too large. Jumping from {0} to {1}".format(old_id, latest_id))
+                return latest_id
+    except Exception as e:
+        print("[Ver Status Sync] Error checking latest event: {0}".format(e))
+
     filters = [
         ['attribute_name','is','sg_status_list'],
         ['event_type','is','Shotgun_Version_Change'],

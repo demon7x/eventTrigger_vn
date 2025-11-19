@@ -117,22 +117,27 @@ def main(last_id):
         return last_id
 
     # -------------------------------------------------------------------------
-    # 초기화 로직: last_id가 없으면 최신 이벤트 ID로 설정
+    # 초기화 및 ID 격차 확인 로직
     # -------------------------------------------------------------------------
-    if not last_id:
-        try:
-            latest_event = sg.find_one(
-                "EventLogEntry",
-                [],
-                ["id"],
-                order=[{"field_name": "id", "direction": "desc"}]
-            )
-            if latest_event:
-                print("[Calc Adj Bid] Initializing last_id to latest event: {0}".format(latest_event['id']))
-                return latest_event['id']
-        except Exception as e:
-            print("[Calc Adj Bid] Error getting latest event: {0}".format(e))
-            return last_id
+    try:
+        # 최신 이벤트 ID 조회
+        latest_event = sg.find_one(
+            "EventLogEntry",
+            [],
+            ["id"],
+            order=[{"field_name": "id", "direction": "desc"}]
+        )
+        
+        if latest_event:
+            latest_id = latest_event['id']
+            
+            # last_id가 없거나, 최신 ID와 5000 이상 차이가 나면 최신 ID로 갱신
+            if not last_id or (latest_id - last_id > 5000):
+                print("[Calc Adj Bid] ID gap too large or init. Jumping from {0} to {1}".format(last_id, latest_id))
+                return latest_id
+                
+    except Exception as e:
+        print("[Calc Adj Bid] Error checking latest event: {0}".format(e))
 
     # TimeLog 변경 감지 (New, Change)
     # Task의 time_logs_sum은 TimeLog가 추가되거나 변경될 때 변동됨
