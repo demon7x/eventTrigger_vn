@@ -22,10 +22,10 @@ if os.path.exists(SCRIPT_PATH):
             script_name='eventTrigger',
         )
     except Exception as e:
-        print(f"Error initializing Shotgun connection: {e}")
+        print("Error initializing Shotgun connection: {0}".format(e))
 else:
     # 로컬 테스트 환경 등 파일이 없을 경우 경고 메시지
-    print(f"Warning: Script key file not found at {SCRIPT_PATH}")
+    print("Warning: Script key file not found at {0}".format(SCRIPT_PATH))
 
 # -----------------------------------------------------------------------------
 # Helper Functions
@@ -99,13 +99,14 @@ def update_task_adj_bid(task_id, timelog_user):
             # 값이 없거나 차이가 있을 때 업데이트 (소수점 4자리 정도 차이)
             if current_val is None or abs(float(current_val) - calc_value) > 0.0001:
                 sg.update('Task', task_id, {'sg_timelog__ajd_bid': calc_value})
-                print(f"[Calc Adj Bid] Task {task_id} Updated: {calc_value:.4f} (Time: {time_logs_sum}, Est: {est_in_mins}, Factor: {factor}, User: {timelog_user.get('name')})")
+                print("[Calc Adj Bid] Task {0} Updated: {1:.4f} (Time: {2}, Est: {3}, Factor: {4}, User: {5})".format(
+                    task_id, calc_value, time_logs_sum, est_in_mins, factor, timelog_user.get('name')))
                 
         except ZeroDivisionError:
-            print(f"[Calc Adj Bid] Task {task_id}: Division by zero during calculation.")
+            print("[Calc Adj Bid] Task {0}: Division by zero during calculation.".format(task_id))
 
     except Exception as e:
-        print(f"[Calc Adj Bid] Error updating Task {task_id}: {e}")
+        print("[Calc Adj Bid] Error updating Task {0}: {1}".format(task_id, e))
         traceback.print_exc()
 
 # -----------------------------------------------------------------------------
@@ -151,7 +152,7 @@ def main(last_id):
                 update_task_adj_bid(task_id, timelog_user)
                 
     except Exception as e:
-        print(f"[Calc Adj Bid] Error processing event {current_id}: {e}")
+        print("[Calc Adj Bid] Error processing event {0}: {1}".format(current_id, e))
         traceback.print_exc()
 
     return current_id
