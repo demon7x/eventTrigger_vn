@@ -5,10 +5,8 @@ import datetime as dt
 import time
 import shotgun_api3 as sa
 import os
-
+import traceback
 import yaml
-#from rocketchat.api import RocketChatAPI
-#from rocketchat_API.rocketchat import RocketChat
 
 #global MAIN_ID
 MAIN_ID = 0
@@ -38,106 +36,45 @@ sg = sa.Shotgun(
                 script_name = 'eventTrigger',
             )
 
+# 플러그인 파일 경로 기준 설정
+PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(PLUGIN_DIR)
+LAST_ID_DIR = os.path.join(ROOT_DIR, 'last_id')
+BACKLOG_FILE = os.path.join(LAST_ID_DIR, 'ver_task_status_sync_backlog.id')
 
-# def set_status_id( _id ):
-#     with open( './last_id/ver_status_id.tx' , 'w' ) as f:
-#         f.write( str(_id) )
-#
-# def get_status_id( ):
-#     status_file = './last_id/ver_status_id.tx'
-#     if not os.path.exists( status_file ):
-#
-#         return False
-#     with open( status_file ) as f:
-#         result = f.read()
-#     print 'result id : ', result
-#     return int(result)
-
-#def send_rchat_msg( content , task ):
-#    api = RocketChat(
-#                    settings={
-#                        'username':'shotgun@west.co.kr',
-#                        'password':'west',
-#                        'domain':'http://10.0.20.73:3000'
-#                        }
-#                )
-#
-#    user = ''
-#    if 'anim' in task :
-#        user = u'@Animation_윤호근' 
-#    elif 'rig' in task:
-#        user = u'@Rigging_전병근'
-#    elif 'sim' in task:
-#        user = u'@Rigging_전병근'
-#
-#    if not user:
-#        return
-#
-#    room = api.create_im_room( user )
-#    api.send_message( u'Status가 tel로 변경되었습니다.', room['id'] )
-#    api.send_message( content, room['id'] )
-#    print( "\n[ Rockec Chat ] Sending message\n" )
-
-
-def sync_version_to_task( old_id ):
-#    if MAIN_ID == old_id:
-#        print "Previous ID is same with old id"
-#        return
-
-    # -------------------------------------------------------------------------
-    # ID 격차 확인 및 Skip 로직 추가
-    # -------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Helper Functions (Backlog ID Management)
+# -----------------------------------------------------------------------------
+def get_backlog_id():
+    if not os.path.exists(BACKLOG_FILE):
+        return None
     try:
-        latest_event = sg.find_one(
-            "EventLogEntry",
-            [],
-            ["id"],
-            order=[{"field_name": "id", "direction": "desc"}]
-        )
-        if latest_event:
-            latest_id = latest_event['id']
-            if old_id and (latest_id - old_id > 5000):
-                print("[Ver Status Sync] ID gap too large. Jumping from {0} to {1}".format(old_id, latest_id))
-                return latest_id
-    except Exception as e:
-        print("[Ver Status Sync] Error checking latest event: {0}".format(e))
+        with open(BACKLOG_FILE, 'r') as f:
+            return int(f.read().strip())
+    except:
+        return None
 
-    filters = [
-        ['attribute_name','is','sg_status_list'],
-        ['event_type','is','Shotgun_Version_Change'],
-    ]
-    keys = [
-        'created_at','description', 'entity','project.Project.name',
-        'entity.Version.sg_task',
-        'entity.Version.sg_task.Task.sg_status_list',
-        'entity.Version.sg_status_list',
-    ]
-    if not old_id:
-        today = dt.datetime(
-            dt.datetime.now().year,
-            dt.datetime.now().month,
-            dt.datetime.now().day,
-        )
-        filters.append( ['created_at','greater_than',today] )
-    else:
-        filters.append( ['id', 'greater_than', old_id ] )
+def set_backlog_id(event_id):
+    if not os.path.exists(LAST_ID_DIR):
+        os.makedirs(LAST_ID_DIR)
+    with open(BACKLOG_FILE, 'w') as f:
+        f.write(str(event_id))
 
-    result = sg.find_one(
-        'EventLogEntry', filters , keys
-    )
-    if not result:
-        result = {}
-        result['id'] = old_id
-        return old_id
-    #for result in results:
-    if old_id == result['id']:
-        print( "Previous ID is same with old id" )
-        result = {}
-        result['id'] = old_id
-        return old_id
-    # pprint( result )
-    # print '\n'
+def remove_backlog_file():
+    if os.path.exists(BACKLOG_FILE):
+        try:
+            os.remove(BACKLOG_FILE)
+            print("[Ver Status Sync] Backlog processing complete. File removed.")
+        except Exception as e:
+            print("[Ver Status Sync] Error removing backlog file: {0}".format(e))
 
+# -----------------------------------------------------------------------------
+# Core Logic
+# -----------------------------------------------------------------------------
+def process_single_event(result):
+    """
+    단일 이벤트(result 딕셔너리)를 처리하는 핵심 로직
+    """
     updated = ''
 
     if result and result['entity.Version.sg_status_list'] in ['change', 'di_chg' ] and not result['entity.Version.sg_task']:
@@ -163,8 +100,7 @@ def sync_version_to_task( old_id ):
                             )
             )
             print( '\n' )
-
-            return result['id']
+            return
 
     if result and result['entity'] and result['entity.Version.sg_task']:
         if not DEV:
@@ -183,9 +119,6 @@ def sync_version_to_task( old_id ):
             print( '{:15} : {}'.format( 'Description', result['description'] ) )
             print( page_addr )
             print( '\n' )
-
-#            if result['entity.Version.sg_task.Task.sg_status_list'] == 'tel':
-#                send_rchat_msg( page_addr, result['entity.Version.sg_task'] )
 
             if result['entity.Version.sg_status_list'] in ['dir', 'sh-dr', 'qc_rt', 'dir_ok', 'dir_rt']:
                 shot_result= sg.find_one(
@@ -238,62 +171,122 @@ def sync_version_to_task( old_id ):
                                                         )
                             )
                         print( '\n' )
-
-            return result['id']
         else:
             print( "[ No Updated ]" )
-            return result['id']
     else:
-        pprint( result )
-        print( "entity or Version.sg_task is none type" )
-        return result['id']
+        # pprint( result )
+        # print( "entity or Version.sg_task is none type" )
+        pass
 
-def main( last_id = False ):
-    return sync_version_to_task( last_id )
+def process_events_range(start_id, limit=1, label="Active"):
+    """
+    start_id보다 큰 이벤트를 limit만큼 가져와서 처리.
+    처리된 마지막 ID를 반환. 처리할 게 없으면 start_id 반환.
+    """
+    filters = [
+        ['attribute_name','is','sg_status_list'],
+        ['event_type','is','Shotgun_Version_Change'],
+        ['id', 'greater_than', start_id]
+    ]
+    keys = [
+        'created_at','description', 'entity','project.Project.name',
+        'entity.Version.sg_task',
+        'entity.Version.sg_task.Task.sg_status_list',
+        'entity.Version.sg_status_list',
+    ]
+
+    # start_id가 없을 경우(None/0) 오늘 날짜 기준 처리 (기존 로직 유지)
+    if not start_id:
+        today = dt.datetime(
+            dt.datetime.now().year,
+            dt.datetime.now().month,
+            dt.datetime.now().day,
+        )
+        filters = [
+            ['attribute_name','is','sg_status_list'],
+            ['event_type','is','Shotgun_Version_Change'],
+            ['created_at','greater_than',today]
+        ]
+
+    try:
+        events = sg.find(
+            'EventLogEntry', 
+            filters, 
+            keys,
+            order=[{'field_name': 'id', 'direction': 'asc'}],
+            limit=limit
+        )
+    except Exception as e:
+        print("[{0}] Error finding events: {1}".format(label, e))
+        return start_id
+
+    if not events:
+        return start_id
+
+    last_processed_id = start_id
+    
+    for event in events:
+        current_id = event['id']
+        
+        # 중복 처리 방지
+        if start_id and current_id == start_id:
+            continue
+
+        try:
+            process_single_event(event)
+        except Exception as e:
+            print("[{0}] Error processing event {1}: {2}".format(label, current_id, e))
+            traceback.print_exc()
+        
+        last_processed_id = current_id
+
+    return last_processed_id
+
+# -----------------------------------------------------------------------------
+# Main Execution
+# -----------------------------------------------------------------------------
+def main(last_id=False):
+    # 1. 최신 ID 확인 및 Gap 체크 (Active ID 관리)
+    try:
+        latest_event = sg.find_one("EventLogEntry", [], ["id"], order=[{"field_name": "id", "direction": "desc"}])
+        if latest_event:
+            latest_id = latest_event['id']
+            
+            # Gap이 5000 이상이면 점프 & Backlog 생성
+            if last_id and (latest_id - last_id > 5000):
+                print("[Ver Status Sync] Large Gap Detected ({0} -> {1}). Jumping to latest.".format(last_id, latest_id))
+                
+                # 이미 Backlog가 처리 중이 아니라면, 현재 last_id를 Backlog 시작점으로 저장
+                if not get_backlog_id():
+                    print("[Ver Status Sync] Saving current position {0} to backlog.".format(last_id))
+                    set_backlog_id(last_id)
+                
+                # Active ID는 최신으로 점프
+                return latest_id
+
+    except Exception as e:
+        print("[Ver Status Sync] Error checking latest event: {0}".format(e))
+
+    # 2. Backlog 처리 (별도 흐름)
+    backlog_id = get_backlog_id()
+    if backlog_id:
+        new_backlog_id = process_events_range(backlog_id, limit=10, label="Backlog")
+        
+        if new_backlog_id > backlog_id:
+            set_backlog_id(new_backlog_id)
+        
+        if last_id and new_backlog_id >= last_id:
+            remove_backlog_file()
+
+    # 3. Active(Real-time) 처리
+    next_active_id = process_events_range(last_id, limit=1, label="Active")
+    
+    return next_active_id
 
 
 def main2():
-    old_id = get_status_id()
-    #old_id = False
-    
-
-#    while True:        
-#        time.sleep( 10 )
-#        result = sync_version_to_task( old_id )
-#        if result == 'No':
-#            continue
-#        set_status_id( result['id'] )
-#        old_id = result['id']
-
-
-    while True:
-        try:
-            time.sleep( 10 )
-            result = sync_version_to_task( old_id )
-            if result == 'No':
-                continue
-            set_status_id( result['id'] )
-            old_id = result['id']
-        except KeyboardInterrupt:
-            break
-        except:
-            print( '\n' )
-            print( '[ Error  ]',time.strftime( '%Y-%m-%d %H:%S', time.localtime() ) )
-            print( '[ old id ]',old_id )
-           #pprint( result )
-
-
-        # try:
-        #     time.sleep( 5 )
-        #     result = sync_version_to_task( old_id )
-        #     set_status_id( result['id'] )
-        #     old_id = result['id']
-        # except:
-        #     old_id = get_status_id()
-        #     print '\n'
-        #     print '[ Error ]'
-
-
+    # 테스트용 함수 (사용 안 함)
+    pass
 
 if __name__ == '__main__':
     main()

@@ -7,9 +7,14 @@ import traceback
 # -----------------------------------------------------------------------------
 # 설정 및 초기화
 # -----------------------------------------------------------------------------
-# 기존 플러그인(ver_task_status_sync.py)과 동일한 경로 사용
 SCRIPT_PATH = '/storenext/inhouse/tool/shotgun/script/script_key.yaml'
 sg = None
+
+# 플러그인 파일 경로 기준 설정
+PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(PLUGIN_DIR)
+LAST_ID_DIR = os.path.join(ROOT_DIR, 'last_id')
+BACKLOG_FILE = os.path.join(LAST_ID_DIR, 'calc_task_adj_bid_backlog.id')
 
 if os.path.exists(SCRIPT_PATH):
     try:
@@ -24,162 +29,185 @@ if os.path.exists(SCRIPT_PATH):
     except Exception as e:
         print("Error initializing Shotgun connection: {0}".format(e))
 else:
-    # 로컬 테스트 환경 등 파일이 없을 경우 경고 메시지
     print("Warning: Script key file not found at {0}".format(SCRIPT_PATH))
 
 # -----------------------------------------------------------------------------
-# Helper Functions
+# Helper Functions (Backlog ID Management)
+# -----------------------------------------------------------------------------
+def get_backlog_id():
+    if not os.path.exists(BACKLOG_FILE):
+        return None
+    try:
+        with open(BACKLOG_FILE, 'r') as f:
+            return int(f.read().strip())
+    except:
+        return None
+
+def set_backlog_id(event_id):
+    if not os.path.exists(LAST_ID_DIR):
+        os.makedirs(LAST_ID_DIR)
+    with open(BACKLOG_FILE, 'w') as f:
+        f.write(str(event_id))
+
+def remove_backlog_file():
+    if os.path.exists(BACKLOG_FILE):
+        try:
+            os.remove(BACKLOG_FILE)
+            print("[Calc Adj Bid] Backlog processing complete. File removed.")
+        except Exception as e:
+            print("[Calc Adj Bid] Error removing backlog file: {0}".format(e))
+
+# -----------------------------------------------------------------------------
+# Core Logic
 # -----------------------------------------------------------------------------
 def get_artist_level_factor(artist_level):
-    """
-    sg_artist_level 텍스트 값을 보정치로 변환
-    Senior : 0.6
-    Mid : 1.0
-    Junior : 1.5
-    """
     if not artist_level:
         return 1.0
-    
     level = str(artist_level).lower().strip()
-    
-    if 'senior' in level:
-        return 0.6
-    elif 'mid' in level:
-        return 1.0
-    elif 'junior' in level:
-        return 1.5
-    
+    if 'senior' in level: return 0.6
+    elif 'mid' in level: return 1.0
+    elif 'junior' in level: return 1.5
     return 1.0
 
 def update_task_adj_bid(task_id, timelog_user):
-    """
-    Task의 time_logs_sum과 TimeLog 생성자(User)의 레벨을 기반으로 sg_timelog__ajd_bid 업데이트
-    공식: 1 - time_logs_sum / (est_in_mins * 보정치)
-    """
-    if not sg:
-        return
+    if not sg: return
 
     try:
-        # Task 정보 조회 (time_logs_sum, est_in_mins)
         task = sg.find_one(
             'Task',
             [['id', 'is', task_id]],
             ['time_logs_sum', 'est_in_mins', 'sg_timelog__ajd_bid']
         )
         
-        if not task:
-            return
+        if not task: return
 
         time_logs_sum = task.get('time_logs_sum') or 0
         est_in_mins = task.get('est_in_mins') or 0
 
-        # est_in_mins가 0이면 계산 불가 (0으로 나누기 방지)
-        if est_in_mins == 0:
-            return
+        if est_in_mins == 0: return
 
-        # 보정치 계산 (TimeLog 생성자 기준)
         factor = 1.0
         if timelog_user and timelog_user['type'] == 'HumanUser':
-            user = sg.find_one(
-                'HumanUser', 
-                [['id', 'is', timelog_user['id']]], 
-                ['sg_artist_level']
-            )
+            user = sg.find_one('HumanUser', [['id', 'is', timelog_user['id']]], ['sg_artist_level'])
             if user:
                 factor = get_artist_level_factor(user.get('sg_artist_level'))
 
-        # 공식 적용
         try:
-            # time_logs_sum과 est_in_mins는 분 단위
-            # 결과값은 0.0 ~ 1.0 사이의 실수
             raw_value = 1.0 - (float(time_logs_sum) / (float(est_in_mins) * factor))
-            
-            # Percent 타입 필드는 0~100 사이의 정수값을 받음
             calc_value = int(raw_value * 100)
             
-            # 기존 값과 다를 경우에만 업데이트 (불필요한 API 호출 방지)
             current_val = task.get('sg_timelog__ajd_bid')
             
-            # 값이 없거나 차이가 있을 때 업데이트
             if current_val is None or current_val != calc_value:
                 sg.update('Task', task_id, {'sg_timelog__ajd_bid': calc_value})
                 print("[Calc Adj Bid] Task {0} Updated: {1}% (Raw: {2:.4f}, Time: {3}, Est: {4}, Factor: {5}, User: {6})".format(
                     task_id, calc_value, raw_value, time_logs_sum, est_in_mins, factor, timelog_user.get('name')))
                 
         except ZeroDivisionError:
-            print("[Calc Adj Bid] Task {0}: Division by zero during calculation.".format(task_id))
+            print("[Calc Adj Bid] Task {0}: Division by zero.".format(task_id))
 
     except Exception as e:
         print("[Calc Adj Bid] Error updating Task {0}: {1}".format(task_id, e))
         traceback.print_exc()
 
+def process_events_range(start_id, limit=1, label="Active"):
+    """
+    start_id보다 큰 이벤트를 limit만큼 가져와서 처리.
+    처리된 마지막 ID를 반환. 처리할 게 없으면 start_id 반환.
+    """
+    if not sg: return start_id
+
+    event_types = ['Shotgun_TimeLog_New', 'Shotgun_TimeLog_Change']
+    filters = [
+        ['id', 'greater_than', start_id],
+        ['event_type', 'in', event_types]
+    ]
+    
+    try:
+        events = sg.find(
+            'EventLogEntry',
+            filters,
+            ['id', 'event_type', 'entity'],
+            order=[{'field_name': 'id', 'direction': 'asc'}],
+            limit=limit
+        )
+    except Exception as e:
+        print("[{0}] Error finding events: {1}".format(label, e))
+        return start_id
+
+    if not events:
+        return start_id
+
+    last_processed_id = start_id
+    
+    for event in events:
+        current_id = event['id']
+        try:
+            if event['entity'] and event['entity']['type'] == 'TimeLog':
+                timelog_id = event['entity']['id']
+                timelog = sg.find_one('TimeLog', [['id', 'is', timelog_id]], ['entity', 'user'])
+                
+                if timelog and timelog.get('entity') and timelog['entity']['type'] == 'Task':
+                    task_id = timelog['entity']['id']
+                    timelog_user = timelog.get('user')
+                    update_task_adj_bid(task_id, timelog_user)
+        except Exception as e:
+            print("[{0}] Error processing event {1}: {2}".format(label, current_id, e))
+            traceback.print_exc()
+        
+        last_processed_id = current_id
+
+    return last_processed_id
+
 # -----------------------------------------------------------------------------
 # Main Execution
 # -----------------------------------------------------------------------------
 def main(last_id):
-    if not sg:
-        return last_id
+    if not sg: return last_id
 
-    # -------------------------------------------------------------------------
-    # 초기화 및 ID 격차 확인 로직
-    # -------------------------------------------------------------------------
+    # 1. 최신 ID 확인 및 Gap 체크 (Active ID 관리)
     try:
-        # 최신 이벤트 ID 조회
-        latest_event = sg.find_one(
-            "EventLogEntry",
-            [],
-            ["id"],
-            order=[{"field_name": "id", "direction": "desc"}]
-        )
-        
+        latest_event = sg.find_one("EventLogEntry", [], ["id"], order=[{"field_name": "id", "direction": "desc"}])
         if latest_event:
             latest_id = latest_event['id']
             
-            # last_id가 없거나, 최신 ID와 5000 이상 차이가 나면 최신 ID로 갱신
+            # Gap이 5000 이상이면 점프 & Backlog 생성
             if not last_id or (latest_id - last_id > 5000):
-                print("[Calc Adj Bid] ID gap too large or init. Jumping from {0} to {1}".format(last_id, latest_id))
-                return latest_id
+                print("[Calc Adj Bid] Large Gap Detected ({0} -> {1}). Jumping to latest.".format(last_id, latest_id))
                 
+                # 이미 Backlog가 처리 중이 아니라면, 현재 last_id를 Backlog 시작점으로 저장
+                if last_id and not get_backlog_id():
+                    print("[Calc Adj Bid] Saving current position {0} to backlog.".format(last_id))
+                    set_backlog_id(last_id)
+                
+                # Active ID는 최신으로 점프 (여기서 리턴하면 main_trigger가 last_id를 갱신함)
+                return latest_id
+
     except Exception as e:
         print("[Calc Adj Bid] Error checking latest event: {0}".format(e))
 
-    # TimeLog 변경 감지 (New, Change)
-    # Task의 time_logs_sum은 TimeLog가 추가되거나 변경될 때 변동됨
-    event_types = ['Shotgun_TimeLog_New', 'Shotgun_TimeLog_Change']
-    
-    filters = [
-        ['id', 'greater_than', last_id],
-        ['event_type', 'in', event_types]
-    ]
-    
-    # 이벤트 조회 (ID 순으로 하나만)
-    event = sg.find_one(
-        'EventLogEntry',
-        filters,
-        ['id', 'event_type', 'entity'],
-        order=[{'field_name': 'id', 'direction': 'asc'}]
-    )
-    
-    if not event:
-        return last_id
+    # 2. Backlog 처리 (별도 흐름)
+    # Active 처리와 무관하게 매 루프마다 조금씩(10개씩) 처리
+    backlog_id = get_backlog_id()
+    if backlog_id:
+        # Active ID(last_id)를 넘지 않도록 주의 (안전장치)
+        # 하지만 Active ID는 이미 점프했을 수 있으므로, 단순히 처리만 진행
+        new_backlog_id = process_events_range(backlog_id, limit=10, label="Backlog")
+        
+        if new_backlog_id > backlog_id:
+            set_backlog_id(new_backlog_id)
+            # print("[Calc Adj Bid] Backlog processed up to {0}".format(new_backlog_id))
+        
+        # Backlog가 Active ID(현재 처리 중인 last_id)를 따라잡았거나, 더 이상 처리할 게 없어서
+        # 최신 이벤트 근처에 도달했는지 확인하는 로직은 복잡하므로,
+        # 여기서는 단순히 "더 이상 처리할 이벤트가 없으면(find 결과가 없으면)" 삭제하는 방식은 위험함 (이벤트가 드물게 발생할 수 있음).
+        # 따라서 Active ID와 비교해야 함.
+        if last_id and new_backlog_id >= last_id:
+            remove_backlog_file()
 
-    current_id = event['id']
+    # 3. Active(Real-time) 처리
+    # main_trigger.py는 여기서 반환된 ID를 다음 루프의 last_id로 사용함
+    # 한 번에 1개씩 처리 (기존 방식 유지)
+    next_active_id = process_events_range(last_id, limit=1, label="Active")
     
-    try:
-        # TimeLog 이벤트 처리
-        if event['entity'] and event['entity']['type'] == 'TimeLog':
-            timelog_id = event['entity']['id']
-            
-            # TimeLog가 연결된 Task와 User(생성자) 찾기
-            timelog = sg.find_one('TimeLog', [['id', 'is', timelog_id]], ['entity', 'user'])
-            
-            if timelog and timelog.get('entity') and timelog['entity']['type'] == 'Task':
-                task_id = timelog['entity']['id']
-                timelog_user = timelog.get('user')
-                update_task_adj_bid(task_id, timelog_user)
-                
-    except Exception as e:
-        print("[Calc Adj Bid] Error processing event {0}: {1}".format(current_id, e))
-        traceback.print_exc()
-
-    return current_id
+    return next_active_id
