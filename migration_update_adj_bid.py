@@ -151,7 +151,13 @@ def run_migration():
             calc_value = 0
 
             try:
-                raw_value = 1.0 - (float(time_logs_sum) / (float(est_in_mins) * factor))
+                # 공식 수정: 1에서 빼는 것이 아니라 비율 자체를 사용
+                # 결과값은 0.0 ~ 1.0 (또는 그 이상) 사이의 실수
+                raw_value = float(time_logs_sum) / (float(est_in_mins) * factor)
+                
+                # Percent 타입 필드는 0~100 사이의 정수값을 받음 (최대 100 제한 없음?)
+                # 보통 진행률이나 사용률은 100%를 넘을 수 있으므로 min(100, ...) 제한은 정책에 따름
+                # 여기서는 제한 없이 그대로 변환
                 calc_value = int(raw_value * 100)
                 
                 current_val = task.get('sg_timelog__ajd_bid')
